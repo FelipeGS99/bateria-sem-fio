@@ -3,11 +3,14 @@
 #include <string>
 #include <vector>
 
+enum class BatteryKind { generic, mouse, keyboard, headset };
+
 struct BatteryReading {
     std::wstring id;
     std::wstring name;
     unsigned percent;
     bool from_windows;
+    BatteryKind kind = BatteryKind::generic;
 };
 
 struct BatteryScan {

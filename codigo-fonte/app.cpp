@@ -1,4 +1,5 @@
 #include "battery.hpp"
+#include "taskbar_strip.hpp"
 
 #include <windows.h>
 #include <windowsx.h>
@@ -26,7 +27,9 @@ constexpr UINT menu_message = WM_APP + 3;
 constexpr UINT refresh_command = 1;
 constexpr UINT quit_command = 2;
 constexpr UINT_PTR timer_id = 1;
+constexpr UINT_PTR placement_timer_id = 2;
 constexpr UINT refresh_ms = 60'000;
+constexpr UINT placement_ms = 600;
 
 constexpr std::array<std::array<uint8_t, 7>, 10> digits{{
     {7, 5, 5, 5, 5, 5, 7}, {2, 6, 2, 2, 2, 2, 7},
@@ -48,8 +51,7 @@ uint32_t icon_pixel(int x, int y, std::optional<unsigned> percent, std::wstring_
         return 0xff224967;
     }
 
-    const uint32_t background =
-        *percent <= 10 ? 0xffff9693 : *percent <= 25 ? 0xffffcd75 : 0xff86e4db;
+    constexpr uint32_t background = 0xff303030;
     const int length = static_cast<int>(number.size());
     const int width = length == 3 ? 3 : 4;
     const int start = (16 - (length * (width + 1) - 1)) / 2;
@@ -61,12 +63,12 @@ uint32_t icon_pixel(int x, int y, std::optional<unsigned> percent, std::wstring_
             const int digit = number[index] - L'0';
             const int bit = 2 - column * 3 / width;
             const int row = (y - 3) * 7 / 9;
-            if (digits[digit][row] & (1 << bit)) return 0xff102529;
+            if (digits[digit][row] & (1 << bit)) return 0xfff5f5f5;
         }
     }
     if (y == 13 && x >= 2 && x <= 13) {
         const auto fill = (12 * *percent + 99) / 100;
-        return static_cast<unsigned>(x - 2) < fill ? 0xff274948 : 0xffa8aba7;
+        return static_cast<unsigned>(x - 2) < fill ? 0xffdfdfdf : 0xff545454;
     }
     return background;
 }
@@ -176,8 +178,10 @@ public:
                                 0, 0, 0, 0, nullptr, nullptr, instance, this);
         if (!hwnd_) return false;
 
+        strip_.open(instance, hwnd_, menu_message);
         start_scan();
         SetTimer(hwnd_, timer_id, refresh_ms, nullptr);
+        SetTimer(hwnd_, placement_timer_id, placement_ms, nullptr);
         return true;
     }
 
@@ -190,6 +194,7 @@ private:
     UINT next_id_ = 1;
     std::shared_ptr<ScanMailbox> mailbox_ = std::make_shared<ScanMailbox>();
     std::vector<BatteryReading> readings_;
+    TaskbarStrip strip_;
     std::map<std::wstring, TrayEntry> entries_;
 
     static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -207,13 +212,14 @@ private:
     LRESULT on_message(UINT message, WPARAM wparam, LPARAM lparam) {
         if (taskbar_created_ && message == taskbar_created_) {
             for (auto& [id, entry] : entries_) entry.registered = false;
-            update_tray();
+            update_presentation();
             return 0;
         }
 
         switch (message) {
         case WM_TIMER:
             if (wparam == timer_id) start_scan();
+            if (wparam == placement_timer_id && !readings_.empty()) update_presentation();
             return 0;
         case scan_message:
             finish_scan();
@@ -231,17 +237,21 @@ private:
             return 0;
         }
         case WM_SETTINGCHANGE:
+        case WM_THEMECHANGED:
+        case WM_DISPLAYCHANGE:
         case WM_DPICHANGED:
+            strip_.appearance_changed();
             for (auto& [id, entry] : entries_) {
                 if (entry.icon) DestroyIcon(entry.icon);
                 entry.icon = nullptr;
             }
-            update_tray();
+            update_presentation();
             return 0;
         case WM_DESTROY:
             KillTimer(hwnd_, timer_id);
-            for (auto& [id, entry] : entries_) remove_icon(entry);
-            entries_.clear();
+            KillTimer(hwnd_, placement_timer_id);
+            strip_.close();
+            clear_tray();
             PostQuitMessage(0);
             return 0;
         default:
@@ -270,7 +280,7 @@ private:
             scanning_ = false;
             scan_failed_ = true;
         }
-        update_tray();
+        update_presentation();
     }
 
     void finish_scan() {
@@ -283,7 +293,8 @@ private:
         scanning_ = false;
         scan_failed_ = result->enumeration_failed;
         readings_ = std::move(result->readings);
-        update_tray();
+        strip_.set_readings(readings_);
+        update_presentation();
     }
 
     NOTIFYICONDATAW notify_data(const TrayEntry& entry) const {
@@ -353,7 +364,16 @@ private:
         return L"Nenhuma bateria disponível";
     }
 
-    void update_tray() {
+    void clear_tray() {
+        for (auto& [id, entry] : entries_) remove_icon(entry);
+        entries_.clear();
+    }
+
+    void update_presentation() {
+        if (strip_.sync()) {
+            clear_tray();
+            return;
+        }
         if (readings_.empty()) {
             set_icon(empty_id, std::nullopt, std::wstring(app_name) + L" · " + empty_status());
         }

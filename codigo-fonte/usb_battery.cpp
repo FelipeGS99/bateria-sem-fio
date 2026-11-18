@@ -144,16 +144,34 @@ public:
         return usb_reports::percentage((*state)[0]);
     }
 
-    std::wstring device_name(uint8_t slot) {
+    std::optional<uint8_t> device_name_feature(uint8_t slot) {
         const auto index = feature(slot, 0x0005);
-        if (!index || !*index) return {};
-        const auto size_reply = request(slot, *index, 0);
+        return index && *index ? index : std::nullopt;
+    }
+
+    BatteryKind device_kind(uint8_t slot, uint8_t name_feature) {
+        const auto type = request(slot, name_feature, 2);
+        if (!type) return BatteryKind::generic;
+        switch ((*type)[0]) {
+        case 0:
+        case 2:
+            return BatteryKind::keyboard;
+        case 3:
+        case 5:
+            return BatteryKind::mouse;
+        default:
+            return BatteryKind::generic;
+        }
+    }
+
+    std::wstring device_name(uint8_t slot, uint8_t name_feature) {
+        const auto size_reply = request(slot, name_feature, 0);
         if (!size_reply || (*size_reply)[0] == 0 || (*size_reply)[0] > 64) return {};
         const size_t size = (*size_reply)[0];
 
         std::string name;
         while (name.size() < size) {
-            const auto part = request(slot, *index, 1, static_cast<uint8_t>(name.size()));
+            const auto part = request(slot, name_feature, 1, static_cast<uint8_t>(name.size()));
             if (!part) return {};
             const auto count = std::min(part->size(), size - name.size());
             name.append(reinterpret_cast<const char*>(part->data()), count);
@@ -233,13 +251,24 @@ void add_logitech(BatteryScan& scan, std::set<std::wstring>& recorded, const std
         const auto value = hidpp.battery(slot);
         if (!value) continue;
 
-        auto name = hidpp.device_name(slot);
+        std::wstring name;
+        BatteryKind kind = BatteryKind::generic;
+        if (const auto name_feature = hidpp.device_name_feature(slot)) {
+            name = hidpp.device_name(slot, *name_feature);
+            kind = hidpp.device_kind(slot, *name_feature);
+        }
+        if (kind == BatteryKind::generic) {
+            if (receiver == Receiver::logitech_mouse || name == L"PRO X Wireless"
+                || name == L"PRO X SUPERLIGHT") kind = BatteryKind::mouse;
+            if (receiver == Receiver::logitech_keyboard || name == L"PRO X TKL")
+                kind = BatteryKind::keyboard;
+        }
         if (name.empty() && receiver == Receiver::logitech_mouse) name = L"PRO X SUPERLIGHT";
         if (name.empty() && receiver == Receiver::logitech_keyboard) name = L"PRO X TKL";
         if (name.empty()) name = L"LIGHTSPEED " + std::to_wstring(slot);
         if (!name.starts_with(L"Logitech")) name.insert(0, L"Logitech ");
         recorded.insert(key);
-        scan.readings.push_back({std::move(key), std::move(name), *value, false});
+        scan.readings.push_back({std::move(key), std::move(name), *value, false, kind});
     }
 }
 
@@ -304,7 +333,7 @@ void append_usb_batteries(BatteryScan& scan) {
         if (receiver == Receiver::hyperx) {
             if (const auto value = hyperx_battery(port)) {
                 recorded.insert(id);
-                scan.readings.push_back({id, L"HyperX Cloud III Wireless", *value, false});
+                scan.readings.push_back({id, L"HyperX Cloud III Wireless", *value, false, BatteryKind::headset});
             }
         } else {
             add_logitech(scan, recorded, id, receiver, port);

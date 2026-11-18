@@ -1,14 +1,16 @@
 # Bateria sem fio
 
-Mostra na bandeja do Windows a porcentagem de bateria de cada dispositivo compatível. A leitura acontece ao abrir e se repete uma vez por minuto.
+Mostra a porcentagem de bateria de cada dispositivo compatível ao lado da área de notificações do Windows. A leitura acontece ao abrir e se repete uma vez por minuto.
 
 ## Como usar
 
 Baixe o arquivo `BateriaSemFio.zip` na página da versão mais recente. [Releases](https://github.com/FelipeGS99/bateria-sem-fio/releases/latest)
 
-1. Extraia o ZIP. Abra `BateriaSemFio.exe` no Windows 10 ou 11. Em um computador com Windows em ARM, use `BateriaSemFio-arm64.exe`.
-2. Conecte os receptores USB ou pareie seus dispositivos Bluetooth. O número no ícone é a porcentagem. Passe o mouse para ver o nome ou clique em qualquer ícone para ver a lista e usar **Atualizar agora** ou **Sair**.
-3. Se os ícones aparecerem sob a seta **^**, arraste-os para perto do relógio ou habilite-os nas configurações da barra de tarefas.
+1. Feche a versão anterior pelo menu **Sair**. Extraia o novo ZIP e abra `BateriaSemFio.exe` no Windows 10 ou 11. Em um computador com Windows em ARM, use `BateriaSemFio-arm64.exe`.
+2. Conecte os receptores USB ou pareie seus dispositivos Bluetooth. A faixa abre automaticamente perto do relógio assim que houver uma leitura. Cada dispositivo aparece com um símbolo e a porcentagem.
+3. Passe o mouse sobre a faixa para ver os nomes. Clique nela para abrir a lista ou usar **Atualizar agora** e **Sair**.
+
+A faixa usa o espaço livre ao lado da bandeja da barra de tarefas principal. Quando esse espaço está ocupado ou indisponível, a faixa fica junto à borda da barra. Se a barra estiver oculta ou na vertical, a bandeja mantém o acesso ao menu.
 
 O aplicativo é portátil e roda localmente, sem instalação, acesso à internet ou permissões de administrador.
 
@@ -28,11 +30,11 @@ O aplicativo consulta as porcentagens que os drivers Bluetooth informam ao Windo
 
 ## Código-fonte
 
-Na pasta `codigo-fonte`, `app.cpp` implementa a bandeja, `battery.cpp` consulta o Bluetooth e `usb_battery.cpp` lê os níveis via USB HID.
+Na pasta `codigo-fonte`, `app.cpp` implementa a bandeja, `battery.cpp` consulta o Bluetooth, `usb_battery.cpp` lê os níveis via USB HID e `taskbar_strip.cpp` desenha e posiciona a faixa.
 
 Para recompilar, abra a pasta `codigo-fonte` e use Zig 0.15.2. No Linux com terminal POSIX, execute `./build.sh` para x64 ou `./build.sh aarch64-windows-gnu BateriaSemFio-arm64.exe` para ARM64. No Windows, rode os dois comandos abaixo no PowerShell, na pasta do código.
 
 ```powershell
 zig rc /fo app.res app.rc
-zig c++ -target x86_64-windows-gnu -std=c++20 -Os -DNDEBUG -DUNICODE -D_UNICODE -static -s -municode '-Wl,--subsystem,windows' app.cpp battery.cpp usb_battery.cpp app.res -o BateriaSemFio.exe -lsetupapi -lcfgmgr32 -lbluetoothapis -lole32 -lshell32 -luser32 -lgdi32 -lhid
+zig c++ -target x86_64-windows-gnu -std=c++20 -Os -DNDEBUG -DUNICODE -D_UNICODE -static -s -municode '-Wl,--subsystem,windows' app.cpp battery.cpp usb_battery.cpp taskbar_strip.cpp app.res -o BateriaSemFio.exe -lsetupapi -lcfgmgr32 -lbluetoothapis -lole32 -lshell32 -luser32 -lgdi32 -lhid -lgdiplus -lcomctl32 -ladvapi32 -loleaut32
 ```
