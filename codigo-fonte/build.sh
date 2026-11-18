@@ -11,5 +11,5 @@ trap 'rm -rf "$temp_dir"' EXIT
 "$zig_exe" rc /fo "$temp_dir/app.res" app.rc
 "$zig_exe" c++ -target "$target" -std=c++20 -Os -DNDEBUG -DUNICODE -D_UNICODE \
     -Wall -Wextra -Werror -static -s -municode -Wl,--subsystem,windows \
-    app.cpp battery.cpp "$temp_dir/app.res" -o "$destination" \
-    -lsetupapi -lcfgmgr32 -lbluetoothapis -lole32 -lshell32 -luser32 -lgdi32
+    app.cpp battery.cpp usb_battery.cpp "$temp_dir/app.res" -o "$destination" \
+    -lsetupapi -lcfgmgr32 -lbluetoothapis -lole32 -lshell32 -luser32 -lgdi32 -lhid

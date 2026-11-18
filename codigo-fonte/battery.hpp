@@ -16,3 +16,4 @@ struct BatteryScan {
 };
 
 BatteryScan scan_batteries();
+void append_usb_batteries(BatteryScan& scan);

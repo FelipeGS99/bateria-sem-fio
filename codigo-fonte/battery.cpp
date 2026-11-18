@@ -1,4 +1,5 @@
 #include "battery.hpp"
+#include "device_handles.hpp"
 
 #include <windows.h>
 #include <setupapi.h>
@@ -31,20 +32,6 @@ constexpr GUID battery_level{
 constexpr GUID no_container{};
 constexpr GUID system_container{
     0, 0, 0, {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
-};
-
-struct DeviceList {
-    HDEVINFO handle;
-    ~DeviceList() {
-        if (handle != INVALID_HANDLE_VALUE) SetupDiDestroyDeviceInfoList(handle);
-    }
-};
-
-struct DeviceFile {
-    HANDLE handle;
-    ~DeviceFile() {
-        if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
-    }
 };
 
 struct DeviceIdentity {
@@ -158,18 +145,7 @@ DeviceIdentity identity_for(HDEVINFO list, SP_DEVINFO_DATA& node, std::wstring i
     identity.instance = std::move(id);
     identity.address = address_in(identity.instance);
 
-    GUID container{};
-    DWORD size = 0;
-    DEVPROPTYPE type = 0;
-    if (SetupDiGetDevicePropertyW(list, &node, &DEVPKEY_Device_ContainerId, &type,
-                                  reinterpret_cast<BYTE*>(&container), sizeof(container), &size, 0)
-        && type == DEVPROP_TYPE_GUID && size == sizeof(container)
-        && !IsEqualGUID(container, no_container) && !IsEqualGUID(container, system_container)) {
-        wchar_t guid[39]{};
-        if (StringFromGUID2(container, guid, static_cast<int>(std::size(guid)))) {
-            identity.container = guid;
-        }
-    }
+    identity.container = container_identifier(list, node);
 
     // A service or audio profile may only carry the address on an ancestor.
     DEVINST parent = node.DevInst;
@@ -257,6 +233,22 @@ struct BluetoothNode {
 
 } // namespace
 
+std::wstring container_identifier(HDEVINFO list, SP_DEVINFO_DATA& node) {
+    GUID container{};
+    DWORD size = 0;
+    DEVPROPTYPE type = 0;
+    if (SetupDiGetDevicePropertyW(list, &node, &DEVPKEY_Device_ContainerId, &type,
+                                  reinterpret_cast<BYTE*>(&container), sizeof(container), &size, 0)
+        && type == DEVPROP_TYPE_GUID && size == sizeof(container)
+        && !IsEqualGUID(container, no_container) && !IsEqualGUID(container, system_container)) {
+        wchar_t guid[39]{};
+        if (StringFromGUID2(container, guid, static_cast<int>(std::size(guid)))) {
+            return guid;
+        }
+    }
+    return {};
+}
+
 BatteryScan scan_batteries() {
     BatteryScan scan;
     DeviceList nodes{SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_PRESENT | DIGCF_ALLCLASSES)};
@@ -338,6 +330,7 @@ BatteryScan scan_batteries() {
         scan.readings.push_back({id, std::move(candidate.name), *level,
                                  candidate.windows_level.has_value()});
     }
+    append_usb_batteries(scan);
     std::sort(scan.readings.begin(), scan.readings.end(), [](const auto& left, const auto& right) {
         const int names = CompareStringOrdinal(left.name.c_str(), -1, right.name.c_str(), -1, TRUE);
         if (names == CSTR_EQUAL || names == 0) return left.id < right.id;
