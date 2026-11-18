@@ -24,6 +24,7 @@ constexpr wchar_t empty_id[] = L"BateriaSemFio";
 constexpr UINT tray_message = WM_APP + 1;
 constexpr UINT scan_message = WM_APP + 2;
 constexpr UINT menu_message = WM_APP + 3;
+constexpr UINT foreground_message = WM_APP + 4;
 constexpr UINT refresh_command = 1;
 constexpr UINT quit_command = 2;
 constexpr UINT_PTR timer_id = 1;
@@ -179,6 +180,9 @@ public:
         if (!hwnd_) return false;
 
         strip_.open(instance, hwnd_, menu_message);
+        foreground_hook_ = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
+                                           &TrayApp::foreground_changed, 0, 0,
+                                           WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
         start_scan();
         SetTimer(hwnd_, timer_id, refresh_ms, nullptr);
         SetTimer(hwnd_, placement_timer_id, placement_ms, nullptr);
@@ -188,6 +192,7 @@ public:
 private:
     HWND hwnd_ = nullptr;
     UINT taskbar_created_ = 0;
+    HWINEVENTHOOK foreground_hook_ = nullptr;
     bool scanning_ = false;
     bool scan_failed_ = false;
     bool menu_open_ = false;
@@ -196,6 +201,11 @@ private:
     std::vector<BatteryReading> readings_;
     TaskbarStrip strip_;
     std::map<std::wstring, TrayEntry> entries_;
+
+    static void CALLBACK foreground_changed(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD) {
+        if (const HWND window = FindWindowW(window_class, app_name))
+            PostMessageW(window, foreground_message, 0, 0);
+    }
 
     static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
         if (message == WM_NCCREATE) {
@@ -220,6 +230,9 @@ private:
         case WM_TIMER:
             if (wparam == timer_id) start_scan();
             if (wparam == placement_timer_id && !readings_.empty()) update_presentation();
+            return 0;
+        case foreground_message:
+            if (!readings_.empty()) update_presentation();
             return 0;
         case scan_message:
             finish_scan();
@@ -250,6 +263,7 @@ private:
         case WM_DESTROY:
             KillTimer(hwnd_, timer_id);
             KillTimer(hwnd_, placement_timer_id);
+            if (foreground_hook_) UnhookWinEvent(foreground_hook_);
             strip_.close();
             clear_tray();
             PostQuitMessage(0);

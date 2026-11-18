@@ -1,6 +1,7 @@
 #include "taskbar_strip.hpp"
 
 #include <commctrl.h>
+#include <dwmapi.h>
 #include <gdiplus.h>
 #include <initguid.h>
 #include <uiautomationclient.h>
@@ -101,17 +102,84 @@ TaskbarSpace measure_controls(HWND bar, RECT bounds) {
     return space;
 }
 
+constexpr const wchar_t* overflow_classes[] = {
+    L"TopLevelWindowForOverflowXamlIsland",
+    L"NotifyIconOverflowWindow",
+};
+
+bool covers(const RECT& outer, const RECT& inner) {
+    return outer.left <= inner.left && outer.top <= inner.top
+        && outer.right >= inner.right && outer.bottom >= inner.bottom;
+}
+
+bool overlaps(const RECT& first, const RECT& second) {
+    RECT intersection{};
+    return IntersectRect(&intersection, &first, &second);
+}
+
+std::optional<RECT> visible_bounds(HWND window) {
+    if (!IsWindowVisible(window)) return std::nullopt;
+    DWORD cloaked = 0;
+    if (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked)))
+        && cloaked) return std::nullopt;
+    RECT rect{};
+    if (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect)))
+        && !IsRectEmpty(&rect)) return rect;
+    if (GetWindowRect(window, &rect) && !IsRectEmpty(&rect)) return rect;
+    return std::nullopt;
+}
+
 bool is_fullscreen(HWND foreground, HWND bar, const RECT& monitor) {
     if (!foreground || foreground == bar || foreground == GetShellWindow()) return false;
     wchar_t name[64]{};
     GetClassNameW(foreground, name, static_cast<int>(std::size(name)));
     const std::wstring_view kind(name);
-    if (kind == L"WorkerW" || kind == L"Progman" || kind == L"Shell_SecondaryTrayWnd")
-        return false;
+    if (kind == L"WorkerW" || kind == L"Progman" || kind == L"Shell_SecondaryTrayWnd"
+        || kind == L"XamlExplorerHostIslandWindow") return false;
+    for (const auto* overflow_class : overflow_classes) {
+        if (kind == overflow_class) return false;
+    }
 
-    RECT rect{};
-    return GetWindowRect(foreground, &rect) && rect.left <= monitor.left
-        && rect.top <= monitor.top && rect.right >= monitor.right && rect.bottom >= monitor.bottom;
+    const auto rect = visible_bounds(foreground);
+    return rect && covers(*rect, monitor);
+}
+
+std::optional<RECT> overflow_bounds(const RECT& monitor) {
+    for (const auto* overflow_class : overflow_classes) {
+        HWND popup = nullptr;
+        while ((popup = FindWindowExW(nullptr, popup, overflow_class, nullptr))) {
+            const auto bounds = visible_bounds(popup);
+            RECT clipped{};
+            // Some shell hosts span the monitor even though the flyout itself does not.
+            if (bounds && !covers(*bounds, monitor)
+                && IntersectRect(&clipped, &*bounds, &monitor)) return clipped;
+        }
+    }
+    return std::nullopt;
+}
+
+RECT move_clear_of_popup(RECT strip, const RECT& popup, const RECT& area, LONG margin) {
+    if (!overlaps(strip, popup)) return strip;
+    const POINT offsets[] = {
+        {popup.left - margin - strip.right, 0},
+        {popup.right + margin - strip.left, 0},
+        {0, popup.top - margin - strip.bottom},
+        {0, popup.bottom + margin - strip.top},
+    };
+    for (const auto& offset : offsets) {
+        RECT candidate = strip;
+        OffsetRect(&candidate, offset.x, offset.y);
+        if (covers(area, candidate)) return candidate;
+    }
+    return strip;
+}
+
+bool taskbar_is_in_front(HWND bar, HWND strip) {
+    HWND above = strip;
+    for (int i = 0; i < 64 && (above = GetWindow(above, GW_HWNDPREV)); ++i) {
+        if (above == bar) return true;
+    }
+    return false;
 }
 
 Gdiplus::Color color(COLORREF rgb, BYTE alpha = 255) {
@@ -346,13 +414,21 @@ bool TaskbarStrip::sync() {
     const LONG right = tray_left.value_or(visible.right) - margin;
     const LONG top = visible.top + (visible.bottom - visible.top - height) / 2;
     RECT desired{right - width, top, right, top + height};
+    const auto overflow = overflow_bounds(monitor.rcMonitor);
     const bool floating = !tray_left || desired.left < visible.left || desired.top < visible.top
-        || desired.bottom > visible.bottom || !space_is_free(bar, bar_rect, desired);
+        || desired.bottom > visible.bottom || (overflow && overlaps(desired, *overflow))
+        || !space_is_free(bar, bar_rect, desired);
     if (floating) {
         const LONG anchor = visible.right - margin;
         const bool at_top = visible.top - monitor.rcMonitor.top < monitor.rcMonitor.bottom - visible.bottom;
         const LONG edge = at_top ? visible.bottom + margin : visible.top - margin - height;
         desired = {anchor - width, edge, anchor, edge + height};
+        if (overflow) {
+            RECT area = monitor.rcMonitor;
+            if (at_top) area.top = visible.bottom;
+            else area.bottom = visible.top;
+            desired = move_clear_of_popup(desired, *overflow, area, margin);
+        }
     }
 
     if (redraw_ || floating != floating_ || dpi != dpi_ || count != shown_) {
@@ -364,9 +440,11 @@ bool TaskbarStrip::sync() {
     }
 
     RECT old{};
-    if (!IsWindowVisible(window_) || !GetWindowRect(window_, &old) || !EqualRect(&old, &desired)) {
+    const bool behind_taskbar = !floating && taskbar_is_in_front(bar, window_);
+    if (behind_taskbar || !IsWindowVisible(window_)
+        || !GetWindowRect(window_, &old) || !EqualRect(&old, &desired)) {
         if (!SetWindowPos(window_, HWND_TOPMOST, desired.left, desired.top, width, height,
-                          SWP_NOACTIVATE | SWP_SHOWWINDOW)) return hide();
+                          SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW)) return hide();
     }
     return IsWindowVisible(window_);
 }

@@ -36,5 +36,5 @@ Para recompilar, abra a pasta `codigo-fonte` e use Zig 0.15.2. No Linux com term
 
 ```powershell
 zig rc /fo app.res app.rc
-zig c++ -target x86_64-windows-gnu -std=c++20 -Os -DNDEBUG -DUNICODE -D_UNICODE -static -s -municode '-Wl,--subsystem,windows' app.cpp battery.cpp usb_battery.cpp taskbar_strip.cpp app.res -o BateriaSemFio.exe -lsetupapi -lcfgmgr32 -lbluetoothapis -lole32 -lshell32 -luser32 -lgdi32 -lhid -lgdiplus -lcomctl32 -ladvapi32 -loleaut32
+zig c++ -target x86_64-windows-gnu -std=c++20 -Os -DNDEBUG -DUNICODE -D_UNICODE -static -s -municode '-Wl,--subsystem,windows' app.cpp battery.cpp usb_battery.cpp taskbar_strip.cpp app.res -o BateriaSemFio.exe -lsetupapi -lcfgmgr32 -lbluetoothapis -lole32 -lshell32 -luser32 -lgdi32 -lhid -lgdiplus -lcomctl32 -ladvapi32 -loleaut32 -ldwmapi
 ```
